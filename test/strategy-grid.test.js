@@ -35,23 +35,50 @@ test("short-only grid contains only sell entries", () => {
   assert.equal(grid.entrySides, "short");
 });
 
-test("pyramid doubles target notional and stops at maxOrderNotional", () => {
+test("long pyramid buys strength above mid with successively smaller stop-limit layers", () => {
   const grid = generateStrategyGrid({
     market,
     midPrice: 100_000,
-    config: config({ pyramid: true, buyEntries: true, sellEntries: false, buyGrids: 6, maxOrderNotional: 160 }),
+    config: config({ pyramid: true, buyEntries: true, sellEntries: false, buyGrids: 6, sellGrids: 6 }),
   });
-  assert.deepEqual(grid.buys.map((order) => order.targetNotional), [10, 20, 40, 80, 160, 160]);
-  assert.equal(grid.buys.every((order) => order.sizingStrategy === "pyramid"), true);
+  assert.deepEqual(grid.buys.map((order) => order.targetNotional), [30, 26, 22, 18, 14, 10]);
+  assert.equal(grid.buys.every((order) => Number(order.triggerPx) > 100_000), true);
+  assert.equal(grid.buys.every((order, index, orders) => index === 0 || Number(order.triggerPx) > Number(orders[index - 1].triggerPx)), true);
+  assert.equal(grid.buys.every((order) => order.orderType === "trigger" && order.trigger.isMarket === false), true);
+  assert.equal(grid.buys.every((order) => order.pairedPrice === null), true);
 });
 
-test("pyramid cap and start both honor the side multiplier", () => {
+test("short pyramid sells weakness below mid", () => {
   const grid = generateStrategyGrid({
     market,
     midPrice: 100_000,
-    config: config({ pyramid: true, buyEntries: true, sellEntries: false, buyGrids: 4, buyMult: 2 }),
+    config: config({ pyramid: true, buyEntries: false, sellEntries: true, buyGrids: 4, sellGrids: 4 }),
   });
-  assert.deepEqual(grid.buys.map((order) => order.targetNotional), [20, 40, 60, 60]);
+  assert.equal(grid.sells.every((order) => Number(order.triggerPx) < 100_000), true);
+  assert.equal(grid.sells.every((order, index, orders) => index === 0 || Number(order.triggerPx) < Number(orders[index - 1].triggerPx)), true);
+  assert.equal(grid.sells.every((order) => order.side === "sell" && order.kind === "pyramid-entry"), true);
+});
+
+test("pyramid multipliers scale layers without changing their descending shape", () => {
+  const grid = generateStrategyGrid({
+    market,
+    midPrice: 100_000,
+    config: config({ pyramid: true, buyEntries: true, sellEntries: false, buyGrids: 4, sellGrids: 4, buyMult: 2 }),
+  });
+  const notionals = grid.buys.map((order) => order.targetNotional);
+  assert.equal(notionals[0], 60);
+  assert.equal(notionals.at(-1), 20);
+  assert.equal(notionals.every((value, index) => index === 0 || value < notionals[index - 1]), true);
+});
+
+test("existing pyramid positions only retain additions beyond weighted entry", () => {
+  const strategyConfig = config({ pyramid: true, buyEntries: true, sellEntries: true, buyGrids: 4, sellGrids: 4 });
+  const grid = generateStrategyGrid({ market, midPrice: 100_000, config: strategyConfig });
+  const bot = new TradingBot({ config: strategyConfig, info: {}, logger: { log() {}, warn() {}, error() {} } });
+  const longAdds = bot.pyramidOrdersForPosition(grid, { size: 1, entryPrice: 104_000 });
+  assert.equal(longAdds.every((order) => order.side === "buy" && Number(order.triggerPx) > 104_000), true);
+  const shortAdds = bot.pyramidOrdersForPosition(grid, { size: -1, entryPrice: 96_000 });
+  assert.equal(shortAdds.every((order) => order.side === "sell" && Number(order.triggerPx) < 96_000), true);
 });
 
 test("long-only strategy can still create a protective sell exit", () => {

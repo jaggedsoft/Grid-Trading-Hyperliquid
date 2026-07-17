@@ -55,11 +55,12 @@ export function loadConfig(argv = process.argv.slice(2)) {
 export function helpText() {
   return `${baseHelpText()}
 Strategy flags:
-  --long, --buy       Place buy entry grids only
-  --short, --sell     Place sell entry grids only
+  --long, --buy       Place buy entries only
+  --short, --sell     Place sell entries only
   --long --short      Explicitly enable both entry sides
-  --pyramid           Double notional at each farther level, capped by maxOrderNotional
+  --pyramid           Add on strength with directional stop-limit triggers
 
+Pyramid layers become smaller as the trend extends; they never average into a losing move.
 Protective reduce-only exits are still allowed on the opposite side.
 Examples:
   npm.cmd run dry-run -- --long

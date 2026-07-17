@@ -2,41 +2,85 @@ import Decimal from "decimal.js";
 import { generateGrid } from "./grid.js";
 import { formatSizeForNotional } from "./precision.js";
 
-function pyramidSide(orders, multiplier, config, market) {
-  if (!config.pyramid) return orders;
-  const requestedStart = new Decimal(config.minOrderNotional).mul(multiplier);
-  const start = Decimal.max(config.minOrderNotional, requestedStart);
-  const cap = Decimal.max(config.minOrderNotional, new Decimal(config.maxOrderNotional).mul(multiplier));
-  return orders.map((order, index) => {
-    const requested = requestedStart.mul(new Decimal(2).pow(index));
-    const target = Decimal.min(cap, Decimal.max(config.minOrderNotional, start.mul(new Decimal(2).pow(index))));
-    const sized = formatSizeForNotional(target.toNumber(), order.price, market.szDecimals, config.minOrderNotional);
+function pyramidNotional(level, count, minimum, maximum, multiplier) {
+  const progress = count === 1 ? new Decimal(0) : new Decimal(level - 1).div(count - 1);
+  const requested = new Decimal(maximum)
+    .minus(new Decimal(maximum).minus(minimum).mul(progress))
+    .mul(multiplier);
+  return {
+    requested: requested.toNumber(),
+    target: Decimal.max(minimum, requested).toNumber(),
+  };
+}
+
+function pyramidSide(sourceOrders, side, multiplier, config, market) {
+  return sourceOrders.map((source, index) => {
+    const level = index + 1;
+    const notional = pyramidNotional(
+      level,
+      sourceOrders.length,
+      config.minOrderNotional,
+      config.maxOrderNotional,
+      multiplier,
+    );
+    const sized = formatSizeForNotional(
+      notional.target,
+      source.price,
+      market.szDecimals,
+      config.minOrderNotional,
+    );
     return {
-      ...order,
-      targetNotional: target.toNumber(),
-      requestedNotional: requested.toNumber(),
+      key: `pyramid-${side}-${level}`,
+      side,
+      level,
+      price: source.price,
+      triggerPx: source.price,
       size: sized.size,
+      targetNotional: notional.target,
+      requestedNotional: notional.requested,
       actualNotional: sized.actualNotional,
-      adjustedToMinimum: requested.lessThan(config.minOrderNotional),
+      adjustedToMinimum: notional.requested < config.minOrderNotional,
+      reduceOnly: false,
+      kind: "pyramid-entry",
+      pairedPrice: null,
+      orderType: "trigger",
+      trigger: { isMarket: false, tpsl: "sl" },
       sizingStrategy: "pyramid",
+      trendDirection: side === "buy" ? "up" : "down",
     };
   });
 }
 
 export function generateStrategyGrid({ market, midPrice, config, weeklySigma = null }) {
   const base = generateGrid({ market, midPrice, config, weeklySigma });
-  const referenceBuys = pyramidSide(base.buys, config.buyMult, config, market);
-  const referenceSells = pyramidSide(base.sells, config.sellMult, config, market);
-  const buys = config.buyEntries ? referenceBuys : [];
-  const sells = config.sellEntries ? referenceSells : [];
+  const pyramidPrices = config.pyramid
+    ? generateGrid({
+        market,
+        midPrice,
+        config: {
+          ...config,
+          buyGrids: config.sellGrids,
+          sellGrids: config.buyGrids,
+        },
+        weeklySigma,
+      })
+    : null;
+  const candidateBuys = config.pyramid
+    ? pyramidSide(pyramidPrices.sells, "buy", config.buyMult, config, market)
+    : base.buys;
+  const candidateSells = config.pyramid
+    ? pyramidSide(pyramidPrices.buys, "sell", config.sellMult, config, market)
+    : base.sells;
+  const buys = config.buyEntries ? candidateBuys : [];
+  const sells = config.sellEntries ? candidateSells : [];
   const buyNotional = buys.reduce((sum, order) => sum + order.actualNotional, 0);
   const sellNotional = sells.reduce((sum, order) => sum + order.actualNotional, 0);
   return {
     ...base,
     buys,
     sells,
-    referenceBuys,
-    referenceSells,
+    referenceBuys: base.buys,
+    referenceSells: base.sells,
     orders: [...sells, ...buys],
     buyNotional,
     sellNotional,

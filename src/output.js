@@ -3,7 +3,10 @@ function money(value) {
 }
 
 function orderLine(label, order, collateral) {
-  return `${label.padEnd(20)} ${order.side.toUpperCase().padEnd(4)} ${order.price.toString().padStart(14)} ${order.size.toString().padStart(14)} ${money(order.actualNotional).padStart(10)} ${collateral}`;
+  const action = order.orderType === "trigger"
+    ? `${order.side.toUpperCase()} STOP`
+    : order.side.toUpperCase();
+  return `${label.padEnd(20)} ${action.padEnd(9)} ${order.price.toString().padStart(14)} ${order.size.toString().padStart(14)} ${money(order.actualNotional).padStart(10)} ${collateral}`;
 }
 
 export function printMarketCandidates(candidates, selected, logger = console) {
@@ -19,6 +22,7 @@ export function printGrid(market, grid, config, logger = console) {
   const label = `${market.fullName}-${market.collateral}`;
   const showSells = grid.entrySides !== "long";
   const showBuys = grid.entrySides !== "short";
+  const pyramid = grid.strategy === "pyramid";
   logger.log("");
   logger.log(config.dryRun ? "DRY RUN — no orders will be placed" : "LIVE ORDER PLAN");
   logger.log(`Market: ${market.fullName} | collateral: ${market.collateral} | OI: ${market.openInterest ?? "n/a"} | 24h volume: ${market.dayNtlVlm ?? "n/a"}`);
@@ -28,13 +32,17 @@ export function printGrid(market, grid, config, logger = console) {
     logger.log("");
     for (const order of grid.sells) logger.log(orderLine(label, order, market.collateral));
     const sellBase = grid.sells.reduce((sum, order) => sum + Number(order.size), 0);
-    logger.log(`Sell liquidity: ${sellBase.toFixed(market.szDecimals)} ${market.fullName} worth ${money(grid.sellNotional)} ${market.collateral}`);
+    logger.log(pyramid
+      ? `Short pyramid: ${grid.sells.length} falling-price triggers, cumulative ${money(grid.sellNotional)} ${market.collateral}`
+      : `Sell liquidity: ${sellBase.toFixed(market.szDecimals)} ${market.fullName} worth ${money(grid.sellNotional)} ${market.collateral}`);
   }
 
   if (showBuys) {
     logger.log("");
     for (const order of grid.buys) logger.log(orderLine(label, order, market.collateral));
-    logger.log(`Adding ${money(grid.buyNotional)} ${market.collateral} of buy liquidity`);
+    logger.log(pyramid
+      ? `Long pyramid: ${grid.buys.length} rising-price triggers, cumulative ${money(grid.buyNotional)} ${market.collateral}`
+      : `Adding ${money(grid.buyNotional)} ${market.collateral} of buy liquidity`);
   }
 
   const adjusted = grid.orders.filter((order) => order.adjustedToMinimum).length;

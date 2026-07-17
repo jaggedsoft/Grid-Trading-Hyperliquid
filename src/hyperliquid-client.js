@@ -63,13 +63,22 @@ export async function fetchVolatilityCandles(info, market, config, now = Date.no
 }
 
 export function sdkOrder(market, order, tif = "Alo") {
+  const type = order.orderType === "trigger"
+    ? {
+        trigger: {
+          isMarket: Boolean(order.trigger?.isMarket),
+          triggerPx: String(order.triggerPx ?? order.price),
+          tpsl: order.trigger?.tpsl ?? "sl",
+        },
+      }
+    : { limit: { tif } };
   return {
     a: market.assetId,
     b: order.side === "buy",
     p: String(order.price),
     s: String(order.size),
     r: Boolean(order.reduceOnly),
-    t: { limit: { tif } },
+    t: type,
     ...(order.cloid ? { c: order.cloid } : {}),
   };
 }

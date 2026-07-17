@@ -1,10 +1,10 @@
 # Hyperliquid Continuous Grid Bot
 
-A Node.js 22 CLI for fixed-range, volatility-scaled, and capped pyramid grids on Hyperliquid perpetual markets.
+A Node.js 22 CLI for fixed-range, volatility-scaled, and directional pyramid strategies on Hyperliquid perpetual markets.
 
 The safe default is a read-only BTC mainnet simulation. It fetches every core and HIP-3 perpetual market, prefers USDC collateral, selects the eligible BTC market with the highest open interest, and prints orders without loading a private key.
 
-> **High risk:** Live mode uses the selected market's maximum isolated leverage. Pyramid sizing deliberately increases exposure into an adverse trend. Circuit breakers reduce risk but cannot guarantee profit, prevent every liquidation, or eliminate slippage. Use a dedicated API wallet and testnet first.
+> **High risk:** Live mode uses the selected market's maximum isolated leverage. Pyramiding intentionally increases exposure after a move has started, so a reversal can rapidly increase losses. Circuit breakers cannot guarantee profit, prevent every liquidation, or eliminate slippage. Use a dedicated API wallet and testnet first.
 
 ## Requirements and setup
 
@@ -26,34 +26,46 @@ Use either the directional name or its order-side alias:
 ```powershell
 # Buy entries only
 npm.cmd run dry-run -- --long
-npm.cmd run dry-run -- --buy
 
 # Sell entries only
 npm.cmd run dry-run -- --short
-npm.cmd run dry-run -- --sell
-
-# Both sides (also the default when no side flag is present)
-npm.cmd run dry-run -- --long --short
 ```
 
-These flags filter exposure-opening grid orders. They never block a required reduce-only order on the opposite side. For example, a long-only grid can still place sell exits for filled buys.
+These flags filter exposure-opening orders. They never block a required reduce-only order on the opposite side.
 
 ## Pyramid strategy
 
-`--pyramid` doubles the target notional at each level farther from midprice. It always stops at `maxOrderNotional`, applied with the side multiplier:
+`--pyramid` is a trend-following position-building strategy. It is designed to add to winning positions:
+`--long --pyramid`: buy stop-limits above midprice; additional buys trigger as price rises.
+`--short --pyramid`: sell stop-limits below midprice; additional sells trigger as price falls.
+`--pyramid` alone arms both breakout directions while flat; the bot cancels its opposite-side triggers after the first fill.
+Layers decrease linearly from maxOrderNotional toward minOrderNotional, while cumulative position exposure increases.
+Existing positions only receive additions beyond their weighted entry—never on their losing side.
+Pyramid fills are excluded from the normal countertrend grid rearm cycle.
+
+- Long pyramid: buy stop-limit triggers are placed above the anchor. Higher levels add to the long only as price rises.
+- Short pyramid: sell stop-limit triggers are placed below the anchor. Lower levels add to the short only as price falls.
+- The first layer is the largest and later additions become successively smaller, from `maxOrderNotional` toward `minOrderNotional`. This follows the common pyramid shape while cumulative position size still increases.
+- If both directions are armed while flat, the first pyramid fill cancels the bot's opposite-direction triggers.
+- When rebuilding an existing long or short, additions on the losing side of its weighted entry are discarded.
+
+Hyperliquid requires conditional stops for this behavior: a normal buy limit above mid or sell limit below mid would execute immediately. The bot therefore sends stop-limit trigger orders with the trigger and limit at the displayed level. A price gap can leave a triggered limit unfilled rather than accepting uncontrolled market-order slippage. See [Hyperliquid order types](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/order-types) and the [exchange trigger payload](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint).
+
+Examples:
 
 ```powershell
-# Default cap: $10, $20, $30, $30 ...
+# Buy strength as BTC rises
 npm.cmd run dry-run -- --long --pyramid
 
-# Wider progression: $10, $20, $40, $80, $160, $160 ...
-npm.cmd run dry-run -- --long --pyramid --max-order-notional=160
+# Sell weakness as BTC falls
+npm.cmd run dry-run -- --short --pyramid
 
-# Short pyramid with a 1.5 sell multiplier: $15, $30, $60 ... capped at $240
-npm.cmd run dry-run -- --short --pyramid --max-order-notional=160 --sell-mult=1.5
+# Arm both breakout directions; the unchosen side is canceled after the first fill
+npm.cmd run dry-run -- --pyramid
+
+# Six long layers ranging from $160 down toward $10
+npm.cmd run dry-run -- --long --pyramid --buy-grids=6 --max-order-notional=160
 ```
-
-Using `--pyramid` without a side flag applies doubling independently to both buy and sell grids. The automatically derived maximum-position limit uses the resulting active-side total.
 
 ## Configuration
 
@@ -66,17 +78,17 @@ npm.cmd start -- --market=WTIOIL --from-mid-price=8 --buy-mult=1.25
 
 | Setting | Default | Meaning |
 | --- | ---: | --- |
-| `dryRun` | `true` | Print one grid and exit without signing |
+| `dryRun` | `true` | Print one plan and exit without signing |
 | `preview` | `true` | Require Enter before every routine live order batch |
-| `buyGrids` / `sellGrids` | `16` | Available levels on each side |
+| `buyGrids` / `sellGrids` | `16` | Levels available to each strategy side |
 | `gridMode` | `fixed` | `fixed` or `volatility` |
-| `fromMidPrice` | `10` | Fixed grid outer distance in percent |
-| `minOrderNotional` / `maxOrderNotional` | `10` / `30` | Linear bounds or pyramid start/cap |
+| `fromMidPrice` | `10` | Fixed outer distance in percent |
+| `minOrderNotional` / `maxOrderNotional` | `10` / `30` | Linear grid bounds; pyramid smallest/largest layer |
 | `buyMult` / `sellMult` | `1` / `1` | Side-specific notional multipliers |
 | `rebuildIntervalHours` | `24` | Full cancel/reanchor interval |
 | `maxEmergencySlippageBps` | `100` | Live entry depth check and risk IOC cap |
 
-Volatility mode uses closed 4h candle log returns from the trailing seven days. It scales sample deviation by `sqrt(42)` and uses `mid * exp(+/-weeklySigma)` as the grid bounds.
+Volatility mode uses closed 4h candle log returns from the trailing seven days. It scales sample deviation by `sqrt(42)` and uses `mid * exp(+/-weeklySigma)` as the strategy bounds.
 
 To try public testnet data:
 
@@ -99,7 +111,7 @@ HL_VAULT_ADDRESS=
 Start on testnet first:
 
 ```powershell
-npm.cmd start -- --network=testnet --dry-run=false --preview=true --market=BTC --long
+npm.cmd start -- --network=testnet --dry-run=false --preview=true --market=BTC --long --pyramid
 ```
 
 Mainnet live mode is explicit:
@@ -108,14 +120,15 @@ Mainnet live mode is explicit:
 npm.cmd start -- --network=mainnet --dry-run=false --preview=true --market=BTC --long --pyramid
 ```
 
-Routine initial, paired, and rebuild orders obey `preview`. Authorized liquidation-risk reductions bypass the prompt because waiting for terminal input could make liquidation more likely.
+Routine initial and rebuild orders obey `preview`. Authorized liquidation-risk reductions bypass the prompt because waiting for terminal input could make liquidation more likely.
 
 ## Continuous behavior and risk controls
 
-- Orders are post-only (`Alo`) and tagged with deterministic 128-bit client IDs.
+- Range-grid entries are post-only. Pyramid entries are stop-limit triggers. Every bot order has a deterministic 128-bit client ID.
 - Only client IDs recorded in the ignored `state/` directory are canceled.
-- An exposure-opening fill creates a reduce-only opposite order one interval toward the anchor. A completed exit rearms its entry.
-- Changing side or pyramid flags forces a fresh rebuild instead of resuming incompatible persisted orders.
+- A range-grid opening fill creates a paired reduce-only exit and a completed cycle rearms its entry. Pyramid additions are not converted into countertrend grid cycles.
+- When a two-direction pyramid first fills, the bot cancels its unchosen direction. Manual and unrelated orders remain untouched.
+- Changing side flags or upgrading from the old doubling pyramid forces a fresh rebuild instead of resuming incompatible orders.
 - Every 24 hours the bot refreshes the midpoint, previews replacements, then cancels and reanchors its own orders.
 - Live startup requires enough book depth to flatten the configured maximum position within 100 bps.
 - At 60% of the initial liquidation buffer, exposure-increasing orders are canceled. At 40%, four reduce-only IOC slices begin; at 20%, the next slice targets the full remainder.
@@ -125,4 +138,4 @@ Routine initial, paired, and rebuild orders obey `preview`. Authorized liquidati
 
 ## Tests
 
-`npm test` uses Node's built-in runner and never makes signed exchange calls. Coverage includes market ranking, volume fallback, HIP-3 IDs, precision, both range modes, side aliases, pyramid caps and multipliers, protective exits, partial/flipping fills, persistence, depth checks, and risk thresholds.
+`npm test` uses Node's built-in runner and never makes signed exchange calls. Coverage includes market ranking, volume fallback, HIP-3 IDs, precision, both range modes, side aliases, directional pyramid prices and sizing, Hyperliquid trigger serialization, opposite-breakout cancellation, protective exits, partial/flipping fills, persistence, depth checks, and risk thresholds.

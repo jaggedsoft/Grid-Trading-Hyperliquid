@@ -3,6 +3,7 @@ import { printGrid } from "./output.js";
 import { formatExistingSize, formatPrice } from "./precision.js";
 import { saveState } from "./state.js";
 import { activeCenterInterval, generateStrategyGrid, strategyIntervalAtCenter } from "./strategy-grid.js";
+import { confirmOrdersWithTimeout } from "./timed-prompt.js";
 import { TradingBot as ResilientTradingBot } from "./resilient-trading-bot.js";
 
 function samePosition(left, right) {
@@ -21,17 +22,29 @@ function positionFromSnapshot(snapshot, coin) {
   };
 }
 
+function strategyOrderSummary(order) {
+  const notional = Number(order.actualNotional ?? Number(order.price) * Number(order.size)).toFixed(2);
+  const action = order.orderType === "trigger"
+    ? `${order.side.toUpperCase()} STOP trigger=${order.triggerPx} limit=${order.price}`
+    : `${order.side.toUpperCase()} ${order.price}`;
+  return `${action} ${order.size} (${notional} USDC)${order.reduceOnly ? " reduce-only" : ""}`;
+}
+
 export class TradingBot extends ResilientTradingBot {
   strategySignature() {
     return JSON.stringify({
       buyEntries: this.config.buyEntries,
       sellEntries: this.config.sellEntries,
       pyramid: this.config.pyramid,
+      pyramidModel: this.config.pyramid ? "trend-stop-limit-v2" : null,
     });
   }
 
   strategyLabel(grid = this.grid) {
-    return `${grid.entrySides} entries, ${grid.strategy} sizing${this.config.pyramid ? ` (doubling capped at ${this.config.maxOrderNotional} before side multiplier)` : ""}`;
+    if (this.config.pyramid) {
+      return `${grid.entrySides} trend entries, pyramid sizing (stop-limit additions in the profitable direction; successively smaller layers)`;
+    }
+    return `${grid.entrySides} entries, linear sizing`;
   }
 
   async initializeMarket() {
@@ -63,6 +76,13 @@ export class TradingBot extends ResilientTradingBot {
     return { market: this.market, grid: this.grid };
   }
 
+  async previewRoutineOrders(orders, reason) {
+    this.logger.log(`\n${reason} order preview (${orders.length} orders):`);
+    for (const order of orders) this.logger.log(`  ${strategyOrderSummary(order)}`);
+    if (!this.config.preview) return true;
+    return confirmOrdersWithTimeout(this.config.previewMaxAgeSeconds * 1000);
+  }
+
   reanchoredExit(position, grid) {
     if (!position || position.size === 0) return null;
     const side = position.size > 0 ? "sell" : "buy";
@@ -92,6 +112,14 @@ export class TradingBot extends ResilientTradingBot {
     };
   }
 
+  pyramidOrdersForPosition(grid, position) {
+    if (!this.config.pyramid || !position || position.size === 0) return [...grid.orders];
+    if (position.size > 0) {
+      return grid.buys.filter((order) => Number(order.triggerPx) > position.entryPrice);
+    }
+    return grid.sells.filter((order) => Number(order.triggerPx) < position.entryPrice);
+  }
+
   async rebuildGrid(reason) {
     this.state.generation += 1;
     for (let attempts = 1; attempts <= 5; attempts += 1) {
@@ -103,7 +131,7 @@ export class TradingBot extends ResilientTradingBot {
       this.logger.log(`Entry strategy: ${this.strategyLabel(grid)}`);
       printGrid(this.market, grid, { ...this.config, dryRun: false }, this.logger);
       const exit = this.reanchoredExit(beforePosition, grid);
-      let routine = [...grid.orders];
+      let routine = this.pyramidOrdersForPosition(grid, beforePosition);
       if (exit) routine = routine.filter((order) => !(order.side === exit.side && order.price === exit.price));
       const decorated = this.decorateOrders(exit ? [exit, ...routine] : routine);
       if (!(await this.previewRoutineOrders(decorated, `${reason} rebuild`))) return false;
@@ -141,13 +169,30 @@ export class TradingBot extends ResilientTradingBot {
     throw new Error("Market or position kept changing while awaiting preview; existing bot orders were preserved");
   }
 
+  async processFill(fill) {
+    const record = fill.cloid ? this.state?.orders?.[fill.cloid] : null;
+    await super.processFill(fill);
+    if (!this.config.pyramid || record?.kind !== "pyramid-entry") return;
+
+    const opposite = Object.values(this.state.orders).filter((order) =>
+      order.kind === "pyramid-entry"
+      && order.side !== record.side
+      && ["open", "pending", "submitted"].includes(order.status));
+    if (opposite.length) {
+      await this.cancelRecords(opposite);
+      this.logger.warn(`${record.side.toUpperCase()} pyramid activated; canceled ${opposite.length} opposite-direction trigger orders.`);
+    }
+    this.state.pyramidDirection = record.side === "buy" ? "long" : "short";
+    await saveState(this.stateFile, this.state);
+  }
+
   async reconcileState(snapshot = null) {
     const current = await super.reconcileState(snapshot);
     const signature = this.strategySignature();
     if (this.state.strategySignature !== signature) {
       this.state.strategySignature = signature;
       this.state.nextRebuildAt = Date.now();
-      this.logger.warn("Strategy flags changed; a fresh grid rebuild is required.");
+      this.logger.warn("Strategy flags or pyramid model changed; a fresh grid rebuild is required.");
       await saveState(this.stateFile, this.state);
     }
     return current;
