@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { helpText, loadConfig, validateLiveEnvironment } from "./configuration.js";
+import { helpText, loadConfig, validateLiveEnvironment } from "./strategy-configuration.js";
 import { createLiveClients, createPublicClients } from "./hyperliquid-client.js";
-import { TradingBot } from "./resilient-trading-bot.js";
+import { TradingBot } from "./strategy-trading-bot.js";
 
 async function main() {
   const config = loadConfig();

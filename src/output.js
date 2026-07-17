@@ -17,17 +17,26 @@ export function printMarketCandidates(candidates, selected, logger = console) {
 
 export function printGrid(market, grid, config, logger = console) {
   const label = `${market.fullName}-${market.collateral}`;
+  const showSells = grid.entrySides !== "long";
+  const showBuys = grid.entrySides !== "short";
   logger.log("");
   logger.log(config.dryRun ? "DRY RUN — no orders will be placed" : "LIVE ORDER PLAN");
   logger.log(`Market: ${market.fullName} | collateral: ${market.collateral} | OI: ${market.openInterest ?? "n/a"} | 24h volume: ${market.dayNtlVlm ?? "n/a"}`);
   logger.log(`Midprice: ${grid.anchorMid} | max leverage: ${market.maxLeverage}x isolated | mode: ${config.gridMode}${grid.weeklySigma ? ` | weekly sigma: ${(grid.weeklySigma * 100).toFixed(2)}%` : ""}`);
-  logger.log("");
-  for (const order of grid.sells) logger.log(orderLine(label, order, market.collateral));
-  const sellBase = grid.sells.reduce((sum, order) => sum + Number(order.size), 0);
-  logger.log(`Sell liquidity: ${sellBase.toFixed(market.szDecimals)} ${market.fullName} worth ${money(grid.sellNotional)} ${market.collateral}`);
-  logger.log("");
-  for (const order of grid.buys) logger.log(orderLine(label, order, market.collateral));
-  logger.log(`Adding ${money(grid.buyNotional)} ${market.collateral} of buy liquidity`);
+
+  if (showSells) {
+    logger.log("");
+    for (const order of grid.sells) logger.log(orderLine(label, order, market.collateral));
+    const sellBase = grid.sells.reduce((sum, order) => sum + Number(order.size), 0);
+    logger.log(`Sell liquidity: ${sellBase.toFixed(market.szDecimals)} ${market.fullName} worth ${money(grid.sellNotional)} ${market.collateral}`);
+  }
+
+  if (showBuys) {
+    logger.log("");
+    for (const order of grid.buys) logger.log(orderLine(label, order, market.collateral));
+    logger.log(`Adding ${money(grid.buyNotional)} ${market.collateral} of buy liquidity`);
+  }
+
   const adjusted = grid.orders.filter((order) => order.adjustedToMinimum).length;
   if (adjusted) logger.warn(`${adjusted} target notionals were raised to Hyperliquid's $${config.minOrderNotional} minimum.`);
 }
