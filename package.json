@@ -1,0 +1,25 @@
+{
+  "name": "hyperliquid-continuous-grid-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Continuous fixed-range and volatility grid trading bot for Hyperliquid perpetual markets",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "start": "node src/cli.js",
+    "dry-run": "node src/cli.js --dry-run=true --market=BTC",
+    "test": "node --test",
+    "testnet:smoke": "node src/cli.js --network=testnet --dry-run=true --market=BTC"
+  },
+  "dependencies": {
+    "@nktkas/hyperliquid": "0.33.1",
+    "decimal.js": "10.6.0",
+    "dotenv": "17.2.3",
+    "viem": "2.37.9"
+  },
+  "overrides": {
+    "ws": "8.21.1"
+  }
+}
