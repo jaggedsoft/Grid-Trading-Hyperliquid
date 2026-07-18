@@ -1,5 +1,6 @@
 import "dotenv/config";
 import defaults from "../config.js";
+import { normalizeLeverage } from "./leverage.js";
 
 const BOOLEAN_KEYS = new Set(["dryRun", "preview"]);
 const NUMBER_KEYS = new Set([
@@ -15,6 +16,11 @@ const NUMBER_KEYS = new Set([
   "pauseSigma",
   "resumeSigma",
   "calmMinutes",
+  "trailingStopPercent",
+  "deriskPercent",
+  "profitFeeBufferBps",
+  "feeFallbackTakerBps",
+  "trailingStopUpdateBps",
   "maxPositionNotional",
   "maxEmergencySlippageBps",
   "previewMaxAgeSeconds",
@@ -83,14 +89,20 @@ export function validateConfig(config) {
   for (const key of ["buyMult", "sellMult", "fromMidPrice", "minOrderNotional", "maxOrderNotional", "rebuildIntervalHours", "volatilityLookbackDays", "pauseSigma", "resumeSigma", "calmMinutes", "maxEmergencySlippageBps", "pollIntervalSeconds"]) {
     if (!(config[key] > 0)) throw new Error(`${key} must be greater than zero`);
   }
+  for (const key of ["profitFeeBufferBps", "feeFallbackTakerBps", "trailingStopUpdateBps"]) {
+    if (!(config[key] >= 0)) throw new Error(`${key} must be zero or greater`);
+  }
+  if (!(config.trailingStopPercent >= 0 && config.trailingStopPercent < 100)) throw new Error("trailingStopPercent must be from 0 inclusive to 100 exclusive");
+  if (!(config.deriskPercent >= 0 && config.deriskPercent <= 100)) throw new Error("deriskPercent must be between 0 and 100 inclusive");
   if (config.fromMidPrice >= 100) throw new Error("fromMidPrice must be below 100%");
+  if (config.maxEmergencySlippageBps >= 10_000) throw new Error("maxEmergencySlippageBps must be below 10000");
   if (config.minOrderNotional < 10) throw new Error("Hyperliquid requires minOrderNotional >= 10");
   if (config.maxOrderNotional < config.minOrderNotional) throw new Error("maxOrderNotional must be >= minOrderNotional");
   if (config.resumeSigma >= config.pauseSigma) throw new Error("resumeSigma must be below pauseSigma");
   if (!(config.liquidationEmergencyRatio < config.liquidationReduceRatio && config.liquidationReduceRatio < config.liquidationWarningRatio && config.liquidationWarningRatio < config.liquidationResumeRatio && config.liquidationResumeRatio <= 1)) {
     throw new Error("Liquidation ratios must increase in emergency < reduce < warning < resume order");
   }
-  return Object.freeze({ ...config });
+  return Object.freeze({ ...config, leverage: normalizeLeverage(config.leverage) });
 }
 
 export function loadConfig(argv) {
@@ -116,6 +128,7 @@ Usage:
   npm start -- --dry-run=false --preview=true --market=BTC
 
 All config.js keys can be overridden as kebab-case flags, for example:
+  --leverage=5 --trailing-stop-percent=0.75 --derisk-percent=25
   --grid-mode=volatility --buy-grids=12 --sell-mult=1.5
 `;
 }

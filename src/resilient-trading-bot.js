@@ -1,4 +1,5 @@
 import { accountSnapshot } from "./hyperliquid-client.js";
+import { resolveLeverage } from "./leverage.js";
 import { hasExitDepth } from "./risk.js";
 import { loadState, ownedOpenOrders, saveState, statePath } from "./state.js";
 import { TradingBot as SafeTradingBot } from "./safe-trading-bot.js";
@@ -9,8 +10,9 @@ export class TradingBot extends SafeTradingBot {
     await this.initializeMarket();
     this.stateFile = statePath(this.workspace, this.config.network, this.market.fullName);
     this.state = await loadState(this.stateFile, this.config.network, this.market.fullName);
-    await this.exchange.updateLeverage({ asset: this.market.assetId, isCross: false, leverage: this.market.maxLeverage });
-    this.logger.warn(`LIVE MODE: ${this.market.fullName} set to ${this.market.maxLeverage}x isolated leverage.`);
+    const leverage = resolveLeverage(this.config.leverage, this.market.maxLeverage);
+    await this.exchange.updateLeverage({ asset: this.market.assetId, isCross: false, leverage });
+    this.logger.warn(`LIVE MODE: ${this.market.fullName} set to ${leverage}x isolated leverage (market maximum ${this.market.maxLeverage}x).`);
     this.logger.warn("Authorized liquidation-risk reductions bypass interactive preview.");
 
     this.maxPositionNotional = this.config.maxPositionNotional ?? this.grid.maxPositionNotional;

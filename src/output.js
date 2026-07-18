@@ -1,3 +1,5 @@
+import { resolveLeverage } from "./leverage.js";
+
 function money(value) {
   return Number(value).toFixed(2);
 }
@@ -23,10 +25,14 @@ export function printGrid(market, grid, config, logger = console) {
   const showSells = grid.entrySides !== "long";
   const showBuys = grid.entrySides !== "short";
   const pyramid = grid.strategy === "pyramid";
+  const leverage = resolveLeverage(config.leverage ?? "max", market.maxLeverage);
+  const leverageLabel = leverage === market.maxLeverage
+    ? `${leverage}x isolated (market maximum)`
+    : `${leverage}x isolated (market maximum ${market.maxLeverage}x)`;
   logger.log("");
   logger.log(config.dryRun ? "DRY RUN — no orders will be placed" : "LIVE ORDER PLAN");
   logger.log(`Market: ${market.fullName} | collateral: ${market.collateral} | OI: ${market.openInterest ?? "n/a"} | 24h volume: ${market.dayNtlVlm ?? "n/a"}`);
-  logger.log(`Midprice: ${grid.anchorMid} | max leverage: ${market.maxLeverage}x isolated | mode: ${config.gridMode}${grid.weeklySigma ? ` | weekly sigma: ${(grid.weeklySigma * 100).toFixed(2)}%` : ""}`);
+  logger.log(`Midprice: ${grid.anchorMid} | leverage: ${leverageLabel} | mode: ${config.gridMode}${grid.weeklySigma ? ` | weekly sigma: ${(grid.weeklySigma * 100).toFixed(2)}%` : ""}`);
 
   if (showSells) {
     logger.log("");
